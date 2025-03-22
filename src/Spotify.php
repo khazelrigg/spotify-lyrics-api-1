@@ -62,22 +62,6 @@ class Spotify {
     }
 
     /**
-    * Cleans a hexadecimal string by removing invalid characters and ensuring even length.
-    *
-    * @param string $hex_str The hexadecimal string to be cleaned.
-    * @return string The cleaned hexadecimal string.
-    */
-
-    function clean_hex( $hex_str ) {
-        $valid_chars = '0123456789abcdefABCDEF';
-        $cleaned = preg_replace( "/[^$valid_chars]/", '', $hex_str );
-        if ( strlen( $cleaned ) % 2 != 0 ) {
-            $cleaned = substr( $cleaned, 0, -1 );
-        }
-        return $cleaned;
-    }
-
-    /**
     * Generates a Time-based One-Time Password ( TOTP ) using the server time.
     *
     * @param int $server_time_seconds The server time in seconds.
@@ -85,30 +69,23 @@ class Spotify {
     */
 
     function generate_totp( $server_time_seconds ) {
-        $secret_cipher = array( 12, 56, 76, 33, 88, 44, 88, 33, 78, 78, 11, 66, 22, 22, 55, 69, 54 );
-        $processed = array();
-        foreach ( $secret_cipher as $i => $byte ) {
-            $processed[] = $byte ^ ( $i % 33 + 9 );
-        }
-        $processed_str = implode( '', $processed );
-        $utf8_bytes = mb_convert_encoding( $processed_str, 'UTF-8', 'ASCII' );
-        $hex_str = bin2hex( $utf8_bytes );
-        $cleaned_hex = $this -> clean_hex( $hex_str );
-        $secret_bytes = hex2bin( $cleaned_hex );
-        $secret_base32 = str_replace( '=', '', Encoding::base32EncodeUpper( $secret_bytes ) );
+        // Using the hardcoded secret from the Go code
+        $secret_base32 = 'GU2TANZRGQ2TQNJTGQ4DONBZHE2TSMRSGQ4DMMZQGMZDSMZUG4';
+
         $totp = TOTP::create(
             $secret_base32,
             30,
             'sha1',
             6
         );
+
         return $totp->at( intval( $server_time_seconds ) );
     }
 
     /**
     * Retrieves the server time and returns the parameters needed for the token request.
     *
-    * @return array The parameters for the token request.
+    * @return array The parameters for the token request and the server time.
     * @throws SpotifyException If there is an error fetching the server time.
     */
 
@@ -119,6 +96,16 @@ class Spotify {
             curl_setopt( $ch, CURLOPT_RETURNTRANSFER, 1 );
             curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, 0 );
             curl_setopt( $ch, CURLOPT_SSL_VERIFYHOST, 0 );
+            curl_setopt( $ch, CURLOPT_HTTPHEADER, [
+                'referer: https://open.spotify.com/',
+                'origin: https://open.spotify.com/',
+                'accept: application/json',
+                'app-platform: WebPlayer',
+                'spotify-app-version: 1.2.61.20.g3b4cd5b2',
+                'user-agent: Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0',
+                'cookie: sp_dc=' . $this->sp_dc
+            ] );
+
             $server_time_result = curl_exec( $ch );
             if ( $server_time_result === false ) {
                 throw new SpotifyException( 'Failed to fetch server time: ' . curl_error( $ch ) );
@@ -130,14 +117,16 @@ class Spotify {
             $server_time_seconds = $server_time_data[ 'serverTime' ];
 
             $totp = $this->generate_totp( $server_time_seconds );
+            $time_str = strval( $server_time_seconds );
 
-            $timestamp = strval( time() );
             $params = [
-                'reason' => 'init',
+                'reason' => 'transport',
                 'productType' => 'web_player',
                 'totp' => $totp,
+                'totpServer' => $totp,
                 'totpVer' => '5',
-                'ts' => $timestamp,
+                'sTime' => $time_str,
+                'cTime' => $time_str . '420'
             ];
 
             return $params;
@@ -163,7 +152,12 @@ class Spotify {
         try {
             $params = $this->getServerTimeParams();
             $headers = [
-                'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'referer: https://open.spotify.com/',
+                'origin: https://open.spotify.com/',
+                'accept: application/json',
+                'app-platform: WebPlayer',
+                'spotify-app-version: 1.2.61.20.g3b4cd5b2',
+                'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0',
                 'Cookie: sp_dc=' . $this->sp_dc
             ];
             $ch = curl_init();
@@ -190,7 +184,7 @@ class Spotify {
             $cache_data = $this->loadCacheFile();
 
             $cache_data[ 'accessToken' ] = $token_json[ 'accessToken' ];
-            $cache_data[ 'clientId' ] = $token_json[ 'clientId' ];
+            $cache_data[ 'clientId' ] = $token_json[ 'clientId' ] ?? ( $cache_data[ 'clientId' ] ?? null );
             $cache_data[ 'accessTokenExpirationTimestampMs' ] = $token_json[ 'accessTokenExpirationTimestampMs' ];
 
             $this->saveCacheFile( $cache_data );
@@ -220,102 +214,8 @@ class Spotify {
         !isset( $cache_data[ 'accessTokenExpirationTimestampMs' ] ) ||
         $cache_data[ 'accessTokenExpirationTimestampMs' ] < round( microtime( true ) * 1000 );
 
-        $needClientToken = !$check ||
-        !isset( $cache_data[ 'clientToken' ] ) ||
-        !isset( $cache_data[ 'clientTokenExpirationTimestampMs' ] ) ||
-        $cache_data[ 'clientTokenExpirationTimestampMs' ] < round( microtime( true ) * 1000 );
-
         if ( $needAccessToken ) {
             $this->getToken();
-            $cache_data = $this->loadCacheFile();
-        }
-
-        if ( $needClientToken && isset( $cache_data[ 'clientId' ] ) ) {
-            $this->getClientToken();
-        }
-    }
-
-    /**
-    * Generates a UUID v4 string.
-    *
-    * @return string The generated UUID.
-    */
-
-    private function generateUUID(): string {
-        $data = random_bytes( 16 );
-        $data[ 6 ] = chr( ord( $data[ 6 ] ) & 0x0f | 0x40 );
-        $data[ 8 ] = chr( ord( $data[ 8 ] ) & 0x3f | 0x80 );
-
-        return vsprintf( '%s%s-%s-%s-%s-%s%s%s', str_split( bin2hex( $data ), 4 ) );
-    }
-
-    /**
-    * Retrieves a client token from Spotify.
-    *
-    * @return string The client token.
-    * @throws SpotifyException If there is an error during the token request.
-    */
-
-    function getClientToken(): void {
-
-        $cache_data = $this->loadCacheFile();
-        try {
-            $payload = [
-                'client_data' => [
-                    'client_version' => '1.2.61.29.g5abf4565',
-                    'client_id' => $cache_data[ 'clientId' ],
-                    'js_sdk_data' => [
-                        'device_brand' => 'unknown',
-                        'device_model' => 'unknown',
-                        'os' => 'windows',
-                        'os_version' => 'NT 10.0',
-                        'device_id' => $this->generateUUID(),
-                        'device_type' => 'computer'
-                    ]
-                ]
-            ];
-
-            $headers = [
-                'Authority: clienttoken.spotify.com',
-                'accept: application/json',
-                'content-type: application/json',
-                'App-platform: WebPlayer',
-                'sec-ch-ua: "Chromium";v="134", "Not:A-Brand";v="24", "Microsoft Edge";v="134"',
-                'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0'
-            ];
-
-            $ch = curl_init();
-            curl_setopt( $ch, CURLOPT_URL, $this->client_token_url );
-            curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
-            curl_setopt( $ch, CURLOPT_POST, true );
-            curl_setopt( $ch, CURLOPT_POSTFIELDS, json_encode( $payload ) );
-            curl_setopt( $ch, CURLOPT_HTTPHEADER, $headers );
-            curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, 0 );
-            curl_setopt( $ch, CURLOPT_SSL_VERIFYHOST, 0 );
-
-            $result = curl_exec( $ch );
-            if ( $result === false ) {
-                throw new SpotifyException( 'Client token request failed: ' . curl_error( $ch ) );
-            }
-
-            $response = json_decode( $result, true );
-            if ( !$response || !isset( $response[ 'granted_token' ][ 'token' ] ) ) {
-                throw new SpotifyException( 'Failed to get client token: Invalid response' );
-            }
-
-            $client_token = $response[ 'granted_token' ][ 'token' ];
-
-            $cache_data[ 'clientToken' ] = $client_token;
-            $cache_data[ 'clientTokenExpirationTimestampMs' ] = round( microtime( true ) * 1000 ) + ( ( $response[ 'granted_token' ][ 'refresh_after_seconds' ] ) * 1000 );
-
-            $this->saveCacheFile( $cache_data );
-        } catch ( Exception $e ) {
-            throw new SpotifyException( $e->getMessage() );
-        }
-        finally {
-            if ( isset( $ch ) ) {
-                curl_close( $ch );
-            }
         }
     }
 
@@ -329,19 +229,22 @@ class Spotify {
         $this->checkTokensExpire();
         $cache_data = $this->loadCacheFile();
         $token = $cache_data[ 'accessToken' ];
-        $client_token = $cache_data[ 'clientToken' ];
         $formated_url = $this->lyrics_url . $track_id . '?format=json&vocalRemoval=false&market=from_token';
         $ch = curl_init();
         curl_setopt( $ch, CURLOPT_CUSTOMREQUEST, 'GET' );
         curl_setopt( $ch, CURLOPT_HTTPHEADER, array(
-            'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0',
-            'sec-ch-ua: "Chromium";v="134", "Not:A-Brand";v="24", "Microsoft Edge";v="134"',
-            'App-platform: WebPlayer',
-            "client_token: $client_token",
+            'User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0',
+            'referer: https://open.spotify.com/',
+            'origin: https://open.spotify.com/',
+            'accept: application/json',
+            'app-platform: WebPlayer',
+            'spotify-app-version: 1.2.61.20.g3b4cd5b2',
             "authorization: Bearer $token"
         ) );
         curl_setopt( $ch, CURLOPT_RETURNTRANSFER, TRUE );
         curl_setopt( $ch, CURLOPT_URL, $formated_url );
+        curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, 0 );
+        curl_setopt( $ch, CURLOPT_SSL_VERIFYHOST, 0 );
         $result = curl_exec( $ch );
         curl_close( $ch );
         return $result;
