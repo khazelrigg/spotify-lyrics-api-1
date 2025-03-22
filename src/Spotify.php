@@ -133,7 +133,7 @@ class Spotify {
 
             $timestamp = strval( time() );
             $params = [
-                'reason' => 'transport',
+                'reason' => 'init',
                 'productType' => 'web_player',
                 'totp' => $totp,
                 'totpVer' => '5',
@@ -276,10 +276,12 @@ class Spotify {
             ];
 
             $headers = [
+                'Authority: clienttoken.spotify.com',
                 'accept: application/json',
                 'content-type: application/json',
                 'App-platform: WebPlayer',
-                'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.0.0 Safari/537.36'
+                'sec-ch-ua: "Chromium";v="134", "Not:A-Brand";v="24", "Microsoft Edge";v="134"',
+                'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0'
             ];
 
             $ch = curl_init();
@@ -332,7 +334,8 @@ class Spotify {
         $ch = curl_init();
         curl_setopt( $ch, CURLOPT_CUSTOMREQUEST, 'GET' );
         curl_setopt( $ch, CURLOPT_HTTPHEADER, array(
-            'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.0.0 Safari/537.36',
+            'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0',
+            'sec-ch-ua: "Chromium";v="134", "Not:A-Brand";v="24", "Microsoft Edge";v="134"',
             'App-platform: WebPlayer',
             "client_token: $client_token",
             "authorization: Bearer $token"
